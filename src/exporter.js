@@ -10,8 +10,26 @@ export async function saveFile(data, format, savePath) {
         } else if (format === 'csv') {
             // Simple flat CSV converter
             if (data.length === 0) return;
-            const headers = Object.keys(data[0]).join(',');
-            const rows = data.map(obj => Object.values(obj).map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+			// Gather all unique keys from the entire dataset
+			const allKeys = new Set();
+			data.forEach(obj => {
+				Object.keys(obj).forEach(key => allKeys.add(key));
+			});
+			const headers = Array.from(allKeys).join(',');
+			const rows = data.map(obj =>
+				Array.from(allKeys).map(key => {
+					const val = obj[key];
+					let strVal;
+					if (val === null || val === undefined) {
+						strVal = '';
+					} else if (typeof val === 'object') {
+						strVal = JSON.stringify(val);
+					} else {
+						strVal = String(val);
+					}
+					return `"${strVal.replace(/"/g, '""')}"`;
+				}).join(',')
+			);
             const csvContent = [headers, ...rows].join('\n');
             await fs.writeFile(fullPath, csvContent);
         }

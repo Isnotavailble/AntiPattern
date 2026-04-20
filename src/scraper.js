@@ -12,23 +12,24 @@ export async function detectPatterns(page, url) {
         const tables = document.querySelectorAll('table');
         if (tables.length > 0) return { type: 'table', count: tables.length, sample: tables[0].innerText.substring(0, 100).replace(/\n/g, ' ') };
 
-        const classCounts = {};
+		const signatureCounts = {};
         document.querySelectorAll('div, li, article').forEach(el => {
             const cls = el.className;
             if (cls && typeof cls === 'string' && cls.trim() !== '') {
-                const mainClass = cls.split(' ')[0];
-                classCounts[mainClass] = (classCounts[mainClass] || 0) + 1;
+				const trimmedCls = cls.trim();
+				const signature = `${el.tagName.toLowerCase()}.${trimmedCls.replace(/\s+/g, '.')}`;
+				signatureCounts[signature] = (signatureCounts[signature] || 0) + 1;
             }
         });
 
-        let bestClass = null, maxCount = 0;
-        for (const [cls, count] of Object.entries(classCounts)) {
-            if (count > 5 && count > maxCount) { maxCount = count; bestClass = cls; }
+		let bestSignature = null, maxCount = 0;
+		for (const [sig, count] of Object.entries(signatureCounts)) {
+			if (count >= 3 && count > maxCount) { maxCount = count; bestSignature = sig; }
         }
 
-        if (bestClass) {
-            const sampleEl = document.querySelector(`.${bestClass}`);
-            return { type: 'div_soup', selector: `.${bestClass}`, count: maxCount, sample: sampleEl ? sampleEl.innerText.substring(0, 100).replace(/\n/g, ' ') : '' };
+		if (bestSignature) {
+			const sampleEl = document.querySelector(bestSignature);
+			return { type: 'div_soup', selector: bestSignature, count: maxCount, sample: sampleEl ? sampleEl.innerText.substring(0, 100).replace(/\n/g, ' ') : '' };
         }
         return { type: 'none' };
     });
@@ -82,8 +83,12 @@ export async function huntApis(page, url, capturePayloads) {
         // Wait an extra 3 seconds to ensure React/Vue AJAX calls finish firing
         await page.waitForTimeout(3000); 
     } catch (error) {
-        // If it times out, intercept the crash and keep going
-        console.log('\n  ⚠ Page load took too long, but saving intercepted APIs anyway...');
+		if (error.name === 'TimeoutError') {
+			// If it times out, intercept the crash and keep going
+			console.log('\n  ⚠ Page load took too long, but saving intercepted APIs anyway...');
+		} else {
+			throw new Error(`Critical Page Failure: ${error.message}`);
+		}
     }
 
     return interceptedApis;
@@ -128,10 +133,18 @@ export async function strikeTarget(page, url, selector) {
     const [apiResult, navResult, popupResult] = await Promise.all([apiTrap, navTrap, popupTrap]);
 
     // Step 4: Classify the outcome
-    if (apiResult !== timeoutMsg) return apiResult;
-    if (popupResult !== timeoutMsg) return popupResult;
-    // Ensure it's a real redirect and not just the same URL
-    if (navResult !== timeoutMsg && navResult.url !== url) return navResult;
+	const successfulEvents = [];
+	if (apiResult !== timeoutMsg) successfulEvents.push(apiResult);
+	if (popupResult !== timeoutMsg) successfulEvents.push(popupResult);
+	if (navResult !== timeoutMsg && navResult.url !== url) successfulEvents.push(navResult);
 
-    return { type: 'dead_end', message: 'Button clicked, but no network or navigation events were triggered.' };
+	if (successfulEvents.length === 0) {
+		return { type: 'dead_end', message: 'Button clicked, but no network or navigation events were triggered.' };
+	}
+
+	const primaryEvent = successfulEvents[0];
+	if (successfulEvents.length > 1) {
+		primaryEvent.concurrentEvents = successfulEvents.slice(1);
+	}
+	return primaryEvent;
 }
